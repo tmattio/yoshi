@@ -57,4 +57,6 @@ let info =
   Cmd.info "yoshi" ~version:"1.0.0" ~doc ~exits:Cmd.Exit.defaults ~man
 
 (* Main function *)
-let () = exit @@ Cmd.eval (Cmd.v info main_t)
+let () =
+  Printexc.record_backtrace true;
+  exit @@ Cmd.eval (Cmd.v info main_t)

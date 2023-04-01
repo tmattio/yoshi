@@ -18,14 +18,28 @@ end
 
 module Gen = struct
   let string_of_field (field : Config.field) =
-    Printf.sprintf "  %s: %s;" field.Config.name field.Config.ftype
+    let rec string_of_ftype ftype =
+      match ftype with
+      | "string" -> "string"
+      | "int" -> "int"
+      | "float" -> "float"
+      | "bool" -> "bool"
+      | _ when String.ends_with ~suffix:" option" ftype ->
+          let underlying_type = String.sub ftype 0 (String.length ftype - 7) in
+          Printf.sprintf "%s option" (string_of_ftype underlying_type)
+      | _ -> failwith ("Unsupported field type: " ^ ftype)
+    in
+    Printf.sprintf "  %s: %s;" field.Config.name
+      (string_of_ftype field.Config.ftype)
 
-  let string_of_field_value value =
+  let rec string_of_field_value value =
     match value with
     | `String s -> Printf.sprintf "\"%s\"" s
     | `Int i -> string_of_int i
     | `Float f -> string_of_float f
     | `Bool b -> string_of_bool b
+    | `Option None -> "None"
+    | `Option (Some v) -> Printf.sprintf "Some (%s)" (string_of_field_value v)
 
   let gen_record fields_values =
     let field_assignments =
@@ -47,7 +61,12 @@ module Gen = struct
     Printf.sprintf "type t = {\n%s\n}" fields_str
 end
 
-let parse_field_value field_type (field_value : Yaml.value) =
+let rec parse_field_value field_type (field_value : Yaml.value) =
+  let parse_option_value underlying_type value =
+    match value with
+    | `Null -> `Option None
+    | _ -> `Option (Some (parse_field_value underlying_type value))
+  in
   match field_type with
   | "string" -> (
       match field_value with
@@ -65,6 +84,11 @@ let parse_field_value field_type (field_value : Yaml.value) =
       match field_value with
       | `Bool b -> `Bool b
       | _ -> failwith "Expected a bool value")
+  | _ when String.ends_with ~suffix:" option" field_type ->
+      let underlying_type =
+        String.sub field_type 0 (String.length field_type - 7)
+      in
+      parse_option_value underlying_type field_value
   | _ -> failwith ("Unsupported field type: " ^ field_type)
 
 let parse_data_item_fields (fields : Config.field list) (yaml_item : Yaml.value)
@@ -73,7 +97,9 @@ let parse_data_item_fields (fields : Config.field list) (yaml_item : Yaml.value)
     (fun (field : Config.field) ->
       match yaml_item with
       | `O fields_map ->
-          let field_value = List.assoc field.name fields_map in
+          let field_value =
+            try List.assoc field.name fields_map with Not_found -> `Null
+          in
           (field.name, parse_field_value field.ftype field_value)
       | _ -> failwith "Expected an object in the YAML data")
     fields
@@ -86,16 +112,9 @@ let parse_data (data_item : Config.data_item) s =
   | _ -> failwith "Expected an array in the YAML data"
 
 let generate_module config_string input_yaml_string =
-  (* Parse the config *)
   let config = Config.read config_string in
-
-  (* Parse the data *)
   let data_item = List.hd config.data in
   let parsed_data = parse_data data_item input_yaml_string in
-
-  (* Generate the type and value strings *)
   let type_string = Gen.gen_type data_item in
   let value_string = Gen.gen_value data_item parsed_data in
-
-  (* Assemble the module *)
   Printf.sprintf "%s\n\n%s\n" type_string value_string
